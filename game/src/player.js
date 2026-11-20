@@ -1,46 +1,76 @@
-// The player on foot: position, health, and the walk step. Driving lives in
-// vehicles.js; entering and leaving a car is coordinated by world.js.
-import { PLAYER } from './config.js';
-import { moveCircle } from './city.js';
+// Solmar Bay — player on foot. No DOM.
+import { CONFIG, clampToCity } from './config.js';
 
-export function createPlayer(x, y) {
+export function createPlayer(world) {
   return {
-    x, y,
+    x: world.playerSpawn.x,
+    y: world.playerSpawn.y,
     angle: 0,
-    health: PLAYER.health,
-    /** The car the player is driving, or null when on foot. */
-    car: null,
-    lastDamageT: -99,
-    moving: false,
+    speed: 0,
+    health: 100,
+    money: 0,
+    inCar: null,
+    onFoot: true,
+    shootCooldown: 0,
+    alive: true,
   };
 }
 
-/** Walk one step in the direction (mx, my), normalised; returns distance moved. */
-export function stepPlayerOnFoot(player, city, mx, my, dt) {
-  const len = Math.hypot(mx, my);
-  if (len < 0.01) {
-    player.moving = false;
-    return 0;
+export function updatePlayer(player, input, dt) {
+  if (!player.onFoot || !player.alive) return;
+  let dx = 0;
+  let dy = 0;
+  if (input.up) dy -= 1;
+  if (input.down) dy += 1;
+  if (input.left) dx -= 1;
+  if (input.right) dx += 1;
+  if (dx !== 0 || dy !== 0) {
+    const len = Math.hypot(dx, dy);
+    dx /= len;
+    dy /= len;
+    player.angle = Math.atan2(dy, dx);
+    player.x += dx * CONFIG.PLAYER_SPEED * dt;
+    player.y += dy * CONFIG.PLAYER_SPEED * dt;
+    player.speed = CONFIG.PLAYER_SPEED;
+  } else {
+    player.speed = 0;
   }
-  const nx = mx / len;
-  const ny = my / len;
-  const before = { x: player.x, y: player.y };
-  const moved = moveCircle(city, player.x, player.y, nx * PLAYER.walkSpeed * dt, ny * PLAYER.walkSpeed * dt, PLAYER.radius);
-  player.x = moved.x;
-  player.y = moved.y;
-  player.angle = Math.atan2(ny, nx);
-  player.moving = true;
-  return Math.hypot(player.x - before.x, player.y - before.y);
+  const c = clampToCity(player.x, player.y);
+  player.x = c.x;
+  player.y = c.y;
+  if (player.shootCooldown > 0) player.shootCooldown -= dt;
 }
 
-export function hurtPlayer(player, damage, elapsed) {
-  player.health = Math.max(0, player.health - damage);
-  player.lastDamageT = elapsed;
+export function damagePlayer(player, dmg) {
+  if (!player.alive) return;
+  player.health -= dmg;
+  if (player.health <= 0) {
+    player.health = 0;
+    player.alive = false;
+  }
 }
 
-/** Health comes back after a few quiet seconds. */
-export function regenPlayer(player, dt, elapsed) {
-  if (player.health > 0 && player.health < PLAYER.health && elapsed - player.lastDamageT > PLAYER.regenDelay) {
-    player.health = Math.min(PLAYER.health, player.health + PLAYER.regenRate * dt);
-  }
+// Save format v2: money, position, current mission.
+export function saveGameV2(state) {
+  return {
+    version: CONFIG.SAVE_VERSION,
+    money: state.player.money,
+    x: Math.round(state.player.x),
+    y: Math.round(state.player.y),
+    mission: state.mission.index,
+    health: state.player.health,
+    wanted: state.police.wanted,
+  };
+}
+
+export function loadGameV2(state, data) {
+  if (!data || data.version !== CONFIG.SAVE_VERSION) return false;
+  state.player.money = data.money;
+  state.player.x = data.x;
+  state.player.y = data.y;
+  state.mission.index = data.mission;
+  state.player.health = data.health;
+  state.police.wanted = data.wanted;
+  state.player.alive = data.health > 0;
+  return true;
 }

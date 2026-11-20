@@ -1,59 +1,57 @@
-// Combat: one hitscan pistol. A shot kills the nearest living person inside
-// range — a pedestrian, or an on-foot cop — and every shot and kill feeds the
-// wanted system. No projectiles, no randomness: the same aim is the same hit.
-import { COMBAT } from './config.js';
-import { nearestPed, scarePeds } from './pedestrians.js';
+// Solmar Bay — shooting, health, damage. No DOM.
+import { CONFIG } from './config.js';
 
-export function createCombat() {
-  return { cooldown: 0 };
+export function shoot(player, bullets) {
+  if (!player.alive || player.shootCooldown > 0) return null;
+  player.shootCooldown = CONFIG.SHOOT_COOLDOWN;
+  const b = {
+    x: player.x + Math.cos(player.angle) * 22,
+    y: player.y + Math.sin(player.angle) * 22,
+    dx: Math.cos(player.angle),
+    dy: Math.sin(player.angle),
+    speed: CONFIG.BULLET_SPEED,
+    life: CONFIG.BULLET_LIFE,
+    dead: false,
+  };
+  bullets.push(b);
+  return b;
 }
 
-/** Cooldown ticks down every step, whether or not the trigger is held. */
-export function tickCombat(combat, dt) {
-  if (combat.cooldown > 0) combat.cooldown = Math.max(0, combat.cooldown - dt);
+// Aim a shot from the player straight at a target point (used by autopilot/shots).
+export function shootAt(player, bullets, tx, ty) {
+  if (!player.alive || player.shootCooldown > 0) return null;
+  player.angle = Math.atan2(ty - player.y, tx - player.x);
+  return shoot(player, bullets);
 }
 
-/**
- * Fire once. `state` is { player, peds, cops, police, stats, elapsed }.
- * Returns { hit: 'ped' | 'cop' | null, x, y } or null when still cooling down.
- */
-export function tryShoot(combat, state, dt) {
-  if (combat.cooldown > 0) return null;
-  combat.cooldown = COMBAT.cooldown;
-  const { player, peds } = state;
-  // Shots come from the car when driving, from the player on foot.
-  const ox = player.car ? player.car.x : player.x;
-  const oy = player.car ? player.car.y : player.y;
-  state.stats.shotsFired += 1;
-  state.police.heat = Math.min(5, state.police.heat + COMBAT.heatPerShot);
-  state.police.lastCrimeT = state.elapsed;
-  scarePeds(peds, ox, oy, 220);
-  const ped = nearestPed(peds, ox, oy, COMBAT.range);
-  let cop = null;
-  let copD = COMBAT.range * COMBAT.range;
-  for (const c of state.police.cops) {
-    if (c.kind !== 'foot' || c.health <= 0) continue;
-    const dx = c.x - ox;
-    const dy = c.y - oy;
-    const d = dx * dx + dy * dy;
-    if (d < copD) { copD = d; cop = c; }
-  }
-  const pedD = ped ? (ped.x - ox) ** 2 + (ped.y - oy) ** 2 : Infinity;
-  if (cop && copD < pedD) {
-    cop.health -= 1;
-    if (cop.health <= 0) {
-      cop.down = true;
-      state.police.heat = Math.min(5, state.police.heat + COMBAT.heatPerCopKill);
-      state.stats.copsDown += 1;
+export function updateBullets(bullets, targets, dt) {
+  let hits = 0;
+  for (const b of bullets) {
+    if (b.dead) continue;
+    b.x += b.dx * b.speed * dt;
+    b.y += b.dy * b.speed * dt;
+    b.life -= dt;
+    if (b.life <= 0 || b.x < 0 || b.x > CONFIG.CITY_W || b.y < 0 || b.y > CONFIG.CITY_H) {
+      b.dead = true;
+      continue;
     }
-    return { hit: 'cop', x: cop.x, y: cop.y };
+    for (const t of targets) {
+      if (!t || t.health <= 0) continue;
+      if (Math.hypot(t.x - b.x, t.y - b.y) < 26) {
+        t.health -= CONFIG.BULLET_DAMAGE;
+        b.dead = true;
+        hits += 1;
+        break;
+      }
+    }
   }
-  if (ped) {
-    ped.alive = false;
-    ped.respawnT = 20;
-    state.stats.pedsDown += 1;
-    state.police.heat = Math.min(5, state.police.heat + COMBAT.heatPerKill);
-    return { hit: 'ped', x: ped.x, y: ped.y };
+  for (let i = bullets.length - 1; i >= 0; i--) {
+    if (bullets[i].dead) bullets.splice(i, 1);
   }
-  return { hit: null, x: ox, y: oy };
+  return hits;
+}
+
+export function damageTarget(target, dmg) {
+  target.health -= dmg;
+  return target.health;
 }

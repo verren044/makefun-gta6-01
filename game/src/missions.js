@@ -1,182 +1,186 @@
-// The story: eight missions, $5,500 in all. Two shapes are generalised so the
-// later missions reuse the same code as the early ones:
-//  heat    — reach N stars, then lose them all (missions 3 and 7)
-//  collect — pick up N bags or crates, then deliver them (missions 4, 6, 8)
-// Pickups are armed when their mission starts and nowhere else.
-import { MISSION_DEFS, GOAL_MONEY } from './config.js';
-import { wantedStars } from './police.js';
+// Solmar Bay — the 8-mission story, $5,500 total. No DOM.
+import { CONFIG } from './config.js';
 
-export const ARRIVE_RADIUS = 70;
-export const PICKUP_RADIUS = 34;
+export const MISSIONS = [
+  { name: 'First Wheels', payout: 300, kind: 'enter_car', desc: 'Get in a car. Any car on the street will do — press E next to one.' },
+  { name: 'Harbor Pickup', payout: 400, kind: 'reach', desc: 'Drive to the pickup point in Old Harbor.' },
+  { name: 'Bay Delivery', payout: 500, kind: 'reach_timed', time: 120, desc: 'Deliver the package to Marina Del Sol before the timer runs out.' },
+  { name: 'Tail the Courier', payout: 600, kind: 'chase', desc: 'Catch up with the courier crossing town. Get within reach of his car.' },
+  { name: 'Ember Escape', payout: 700, kind: 'escape', desc: 'The cops are on you. Lose the heat and reach the Northgate Hills safehouse.' },
+  { name: 'Casino Setup', payout: 800, kind: 'shootout', desc: 'Clear the three guards outside the Ember Casino, then reach the side door.' },
+  { name: 'Porto Payday', payout: 1000, kind: 'multi', desc: 'Two drops: Porto Verde first, then Marina Del Sol.' },
+  { name: 'The Ember Score', payout: 1200, kind: 'finale', desc: 'Hit the Ember Casino vault. Walk in, take the score, walk out rich.' },
+];
 
-export function createMissions() {
-  const missions = {
+export function totalPayout() {
+  return MISSIONS.reduce((s, m) => s + m.payout, 0);
+}
+
+export function createMissionState(world) {
+  const state = {
     index: 0,
-    /** 'go' | 'gain' | 'lose' | 'collect' | 'deliver' */
-    phase: 'go',
-    collected: 0,
-    pickups: [],
     completed: [],
-    bannerT: 0,
-    bannerText: '',
-    storyDone: false,
+    money: 0,
+    started: false,
+    stage: 0,
+    timer: 0,
+    target: { x: 0, y: 0 },
+    chase: { x: 0, y: 0, tx: 0, ty: 0 },
+    enemies: [],
+    done: false,
+    justCompleted: null,
   };
-  armMission(missions, 0);
-  return missions;
+  return state;
 }
 
-export function currentDef(missions) {
-  return MISSION_DEFS[missions.index];
-}
-
-/** Arm a mission: set its phase and spawn its pickups. */
-export function armMission(missions, index) {
-  const def = MISSION_DEFS[index];
-  if (!def) {
-    missions.storyDone = true;
-    return;
+function missionTarget(i, world) {
+  switch (i) {
+    case 1: return { x: 900, y: 1960 }; // Old Harbor
+    case 2: return { x: 570, y: 560 }; // Marina Del Sol
+    case 4: return { x: 2700, y: 1960 }; // Northgate Hills safehouse
+    case 5: return { x: world.casino.x + 40, y: world.casino.y + 40 }; // Casino side door
+    case 6: return { x: 1710, y: 560 }; // Porto Verde first drop
+    case 7: return { x: world.casino.x, y: world.casino.y }; // Casino vault
+    default: return { x: world.playerSpawn.x, y: world.playerSpawn.y };
   }
-  missions.index = index;
-  missions.collected = 0;
-  missions.pickups = [];
-  if (def.type === 'heat') {
-    missions.phase = 'gain';
-  } else if (def.type === 'collect') {
-    missions.phase = 'collect';
-    missions.pickups = def.spots.map((s) => ({ x: s.x, y: s.y, kind: def.pickupKind, taken: false }));
+}
+
+export function startMission(mission, world, police) {
+  const i = mission.index;
+  const def = MISSIONS[i];
+  if (!def) return;
+  mission.started = true;
+  mission.stage = 0;
+  mission.enemies = [];
+  mission.justCompleted = null;
+  if (def.kind === 'reach_timed') mission.timer = def.time;
+  if (def.kind === 'chase') {
+    mission.chase = { x: 1500, y: 700, tx: 3000, ty: 2000 };
+    mission.target = { x: 1500, y: 700 };
+  } else if (def.kind === 'multi') {
+    mission.target = { x: 1710, y: 560 };
   } else {
-    missions.phase = 'go';
+    mission.target = missionTarget(i, world);
+  }
+  if (def.kind === 'shootout') {
+    const c = world.casino;
+    mission.enemies = [
+      { x: c.x - 160, y: c.y - 60, health: 100 },
+      { x: c.x + 160, y: c.y - 40, health: 100 },
+      { x: c.x, y: c.y + 170, health: 100 },
+    ];
+  }
+  if (def.kind === 'escape' && police) {
+    police.wanted = Math.max(police.wanted, 2);
   }
 }
 
-/** The current objective for the HUD and the autopilot. (px, py) is the
- *  player's position, in the car when driving. */
-export function missionObjective(missions, police, px, py) {
-  const def = currentDef(missions);
-  if (!def) return { kind: 'done', x: 0, y: 0, text: 'Story complete' };
-  if (def.type === 'goto') {
-    return { kind: 'goto', x: def.target.x, y: def.target.y, text: def.blurb, requireCar: def.requireCar };
-  }
-  if (def.type === 'goto2') {
-    if (missions.phase === 'go') {
-      return { kind: 'goto', x: def.target.x, y: def.target.y, text: def.blurb, requireCar: def.requireCar, leg: 1, legs: 2 };
-    }
-    return { kind: 'goto', x: def.target2.x, y: def.target2.y, text: def.blurb, requireCar: def.requireCar, leg: 2, legs: 2 };
-  }
-  if (def.type === 'heat') {
-    if (missions.phase === 'gain') {
-      return { kind: 'heat-gain', x: 0, y: 0, text: `Reach ${def.heat} stars of heat`, heat: def.heat };
-    }
-    return { kind: 'heat-lose', x: 0, y: 0, text: 'Lose the heat — stay clean and far from cops', heat: def.heat };
-  }
-  // collect
-  if (missions.phase === 'collect') {
-    let nearest = null;
+// Where the HUD marker points right now. Needs the full game state for enter_car.
+export function currentObjective(state) {
+  const m = state.mission;
+  if (m.done || m.index >= MISSIONS.length) return null;
+  const def = MISSIONS[m.index];
+  if (def.kind === 'enter_car') {
+    let best = null;
     let bestD = Infinity;
-    for (const p of missions.pickups) {
-      if (p.taken) continue;
-      const d = (p.x - px) ** 2 + (p.y - py) ** 2;
-      if (d < bestD) { bestD = d; nearest = p; }
+    for (const c of state.cars) {
+      const d = Math.hypot(c.x - state.player.x, c.y - state.player.y);
+      if (d < bestD) { bestD = d; best = c; }
     }
-    if (nearest) {
-      return { kind: 'collect', x: nearest.x, y: nearest.y, text: def.blurb, count: missions.collected, total: def.pickups };
-    }
-    missions.phase = 'deliver';
+    return best ? { x: best.x, y: best.y, radius: 70, label: def.name } : null;
   }
-  return { kind: 'deliver', x: def.deliver.x, y: def.deliver.y, text: 'Deliver them to the drop-off', count: missions.collected, total: def.pickups };
+  if (def.kind === 'chase') return { x: m.chase.x, y: m.chase.y, radius: 90, label: def.name };
+  if (def.kind === 'shootout') {
+    const alive = m.enemies.filter((e) => e.health > 0);
+    if (alive.length > 0) return { x: alive[0].x, y: alive[0].y, radius: 60, label: def.name + ' — clear the guards' };
+    return { x: m.target.x, y: m.target.y, radius: 70, label: def.name };
+  }
+  if (def.kind === 'multi') {
+    const t = m.stage === 0 ? { x: 1710, y: 560 } : { x: 570, y: 560 };
+    return { x: t.x, y: t.y, radius: 70, label: def.name + (m.stage === 0 ? ' — drop 1 of 2' : ' — drop 2 of 2') };
+  }
+  return { x: m.target.x, y: m.target.y, radius: 70, label: def.name };
 }
 
-/** One line for the HUD: "MISSION 3/8 — Three-Star Heat (0/3★)". */
-export function missionHudLine(missions, police) {
-  const def = currentDef(missions);
-  if (!def) return `STORY COMPLETE — $${GOAL_MONEY} / $${GOAL_MONEY}`;
-  const stars = wantedStars(police);
-  if (def.type === 'heat') {
-    if (missions.phase === 'gain') return `MISSION ${def.id}/8 — ${def.name} (${stars}/${def.heat}★)`;
-    return `MISSION ${def.id}/8 — ${def.name} (lose ${stars}★)`;
-  }
-  if (def.type === 'collect') {
-    return `MISSION ${def.id}/8 — ${def.name} (${missions.collected}/${def.pickups})`;
-  }
-  if (def.type === 'goto2') {
-    return `MISSION ${def.id}/8 — ${def.name} (${missions.phase === 'go' ? '1' : '2'}/2)`;
-  }
-  return `MISSION ${def.id}/8 — ${def.name}`;
+function completeMission(state, player) {
+  const def = MISSIONS[state.mission.index];
+  player.money += def.payout;
+  state.mission.money += def.payout;
+  state.mission.completed.push(def.name);
+  state.mission.justCompleted = def.name;
+  state.mission.index += 1;
+  state.mission.started = false;
+  if (state.mission.index >= MISSIONS.length) state.mission.done = true;
 }
 
-/**
- * Advance the mission state. `world` carries player, police, money and stats.
- * Returns the completed mission def, or null.
- */
-export function updateMissions(missions, world, dt) {
-  if (missions.storyDone) return null;
-  const def = currentDef(missions);
-  const { player, police } = world;
-  // The autopilot and the HUD read the player's position through these.
-  missions._px = player.car ? player.car.x : player.x;
-  missions._py = player.car ? player.car.y : player.y;
-  const px = missions._px;
-  const py = missions._py;
+export function updateMission(state, dt) {
+  const m = state.mission;
+  if (m.done) return null;
+  const def = MISSIONS[m.index];
+  if (!def) return null;
+  if (!m.started) startMission(m, state.world, state.police);
+  const player = state.player;
 
-  if (def.type === 'goto') {
-    const d = Math.hypot(def.target.x - px, def.target.y - py);
-    if (d < ARRIVE_RADIUS && (!def.requireCar || player.car)) return completeMission(missions, world, def);
-  } else if (def.type === 'goto2') {
-    const target = missions.phase === 'go' ? def.target : def.target2;
-    const d = Math.hypot(target.x - px, target.y - py);
-    if (d < ARRIVE_RADIUS && (!def.requireCar || player.car)) {
-      if (missions.phase === 'go') {
-        missions.phase = 'go2';
-        missions.bannerT = 2;
-        missions.bannerText = 'Leg 2 — head to the next stop';
-      } else {
-        return completeMission(missions, world, def);
+  if (def.kind === 'enter_car') {
+    if (player.inCar) {
+      completeMission(state, player);
+      return def.name;
+    }
+    return null;
+  }
+
+  if (def.kind === 'chase') {
+    // Courier drives toward his destination at 150 u/s.
+    const dx = m.chase.tx - m.chase.x;
+    const dy = m.chase.ty - m.chase.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    const step = Math.min(150 * dt, dist);
+    m.chase.x += (dx / dist) * step;
+    m.chase.y += (dy / dist) * step;
+    if (Math.hypot(player.x - m.chase.x, player.y - m.chase.y) < 90) {
+      completeMission(state, player);
+      return def.name;
+    }
+    return null;
+  }
+
+  if (def.kind === 'shootout') {
+    const alive = m.enemies.filter((e) => e.health > 0);
+    if (alive.length === 0) {
+      if (Math.hypot(player.x - m.target.x, player.y - m.target.y) < 80) {
+        completeMission(state, player);
+        return def.name;
       }
     }
-  } else if (def.type === 'heat') {
-    const stars = wantedStars(police);
-    if (missions.phase === 'gain' && stars >= def.heat) {
-      missions.phase = 'lose';
-      missions.bannerT = 2.5;
-      missions.bannerText = `${def.heat} stars! Now lose them all`;
-    } else if (missions.phase === 'lose' && stars === 0) {
-      return completeMission(missions, world, def);
-    }
-  } else if (def.type === 'collect') {
-    if (missions.phase === 'collect') {
-      for (const p of missions.pickups) {
-        if (p.taken) continue;
-        if (Math.hypot(p.x - px, p.y - py) < PICKUP_RADIUS) {
-          p.taken = true;
-          missions.collected += 1;
-          world.stats.pickups += 1;
-          world.events |= 8; // EVENT_PICKUP
-          if (missions.collected >= def.pickups) missions.phase = 'deliver';
-          break;
-        }
+    return null;
+  }
+
+  if (def.kind === 'multi') {
+    const t = m.stage === 0 ? { x: 1710, y: 560 } : { x: 570, y: 560 };
+    if (Math.hypot(player.x - t.x, player.y - t.y) < 70) {
+      if (m.stage === 0) {
+        m.stage = 1;
+        return 'drop1';
       }
-    } else {
-      const d = Math.hypot(def.deliver.x - px, def.deliver.y - py);
-      if (d < ARRIVE_RADIUS) return completeMission(missions, world, def);
+      completeMission(state, player);
+      return def.name;
+    }
+    return null;
+  }
+
+  if (def.kind === 'reach_timed') {
+    m.timer -= dt;
+    if (m.timer <= 0) {
+      // Out of time: restart the run, keep the mission.
+      m.started = false;
+      return 'timeout';
     }
   }
-  if (missions.bannerT > 0) missions.bannerT -= dt;
+
+  // reach / reach_timed / escape / finale: touch the marker.
+  if (Math.hypot(player.x - m.target.x, player.y - m.target.y) < 70) {
+    completeMission(state, player);
+    return def.name;
+  }
   return null;
-}
-
-function completeMission(missions, world, def) {
-  world.money += def.reward;
-  world.stats.missionsDone += 1;
-  missions.completed.push(def.id);
-  missions.bannerT = 3;
-  missions.bannerText = `Mission complete — ${def.name} +$${def.reward}`;
-  world.events |= 1; // EVENT_MISSION
-  const next = missions.index + 1;
-  if (next >= MISSION_DEFS.length) {
-    missions.storyDone = true;
-    world.events |= 32; // EVENT_STORY_DONE
-  } else {
-    armMission(missions, next);
-  }
-  return def;
 }
