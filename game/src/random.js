@@ -1,7 +1,6 @@
-// A small seeded random number generator (mulberry32): the same seed gives the same
-// city, traffic and pedestrians, which is what makes the game deterministic — the
-// screenshot scenes repeatable and the story simulation provable. Never use Math.random
-// in game code; every random draw goes through a generator created from the seed.
+// One seeded generator for the whole game: the same seed always builds the same
+// city, traffic and pedestrians, which is what makes the story simulation and
+// the screenshots repeatable. Nothing in game/ calls Math.random.
 
 export function createRandom(seed) {
   let a = seed | 0;
@@ -14,36 +13,27 @@ export function createRandom(seed) {
 }
 
 /** A float in [min, max). */
-export function randRange(rng, min, max) {
-  return min + rng() * (max - min);
+export function range(random, min, max) {
+  return min + random() * (max - min);
 }
 
 /** An integer in [min, max]. */
-export function randInt(rng, min, max) {
-  return min + Math.floor(rng() * (max - min + 1));
+export function int(random, min, max) {
+  return min + Math.floor(random() * (max - min + 1));
 }
 
-/** One element of a non-empty array, uniformly. */
-export function randPick(rng, array) {
-  return array[Math.floor(rng() * array.length)];
+/** One element of an array. */
+export function pick(random, list) {
+  return list[Math.floor(random() * list.length)];
 }
 
-/** Clamp a value into [min, max]. */
-export function clamp(value, min, max) {
-  return value < min ? min : value > max ? max : value;
-}
-
-/** Wrap an angle into (-PI, PI]. */
-export function angleDiff(a, b) {
-  let d = a - b;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d <= -Math.PI) d += Math.PI * 2;
-  return d;
-}
-
-/** Euclidean distance between two points. */
-export function dist(x1, y1, x2, y2) {
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  return Math.sqrt(dx * dx + dy * dy);
+/** Fisher-Yates, in place, driven by the seeded generator. */
+export function shuffle(random, list) {
+  for (let i = list.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(random() * (i + 1));
+    const tmp = list[i];
+    list[i] = list[j];
+    list[j] = tmp;
+  }
+  return list;
 }

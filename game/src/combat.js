@@ -1,111 +1,59 @@
-// Combat: Marco's pistol (Space, or click to fire toward the mouse) and his fists
-// (F). Bullets fly straight, stop on walls, and hurt whatever they touch — a
-// pedestrian, a car, a cop car — and every hit like that is a crime the wanted
-// system hears about.
+// Combat: one hitscan pistol. A shot kills the nearest living person inside
+// range — a pedestrian, or an on-foot cop — and every shot and kill feeds the
+// wanted system. No projectiles, no randomness: the same aim is the same hit.
+import { COMBAT } from './config.js';
+import { nearestPed, scarePeds } from './pedestrians.js';
 
-import { BULLET, CAR_CONF, PLAYER_CONF } from './config.js';
-import { angleDiff, dist } from './random.js';
-import { circleHitsSolid } from './city.js';
-import { damageCar } from './vehicles.js';
-import { hitPedestrian } from './pedestrians.js';
-
-export function createBullet(x, y, angle) {
-  return { x, y, angle, travelled: 0, alive: true };
+export function createCombat() {
+  return { cooldown: 0 };
 }
 
-/** Fire one bullet from (x, y) toward (tx, ty). */
-export function fireBullet(state, x, y, tx, ty) {
-  const angle = Math.atan2(ty - y, tx - x);
-  state.bullets.push(createBullet(x + Math.cos(angle) * 20, y + Math.sin(angle) * 20, angle));
-  state.events.push({ type: 'shot', x, y });
-  state.danger = { x, y, radius: 420, panic: 1 };
-  state.shotsFired += 1;
-}
-
-function bulletHitsCar(bullet, car) {
-  if (car.wrecked) return false;
-  const dx = bullet.x - car.x;
-  const dy = bullet.y - car.y;
-  const along = dx * Math.cos(car.angle) + dy * Math.sin(car.angle);
-  const across = -dx * Math.sin(car.angle) + dy * Math.cos(car.angle);
-  return Math.abs(along) < CAR_CONF.length / 2 + 4 && Math.abs(across) < CAR_CONF.width / 2 + 4;
-}
-
-/** Advance every bullet; hits push events the world turns into wanted stars. */
-export function updateBullets(state, dt) {
-  for (const b of state.bullets) {
-    if (!b.alive) continue;
-    const stepLen = BULLET.speed * dt;
-    b.x += Math.cos(b.angle) * stepLen;
-    b.y += Math.sin(b.angle) * stepLen;
-    b.travelled += stepLen;
-    if (b.travelled > BULLET.range || circleHitsSolid(state.city, b.x, b.y, 2)) {
-      b.alive = false;
-      state.events.push({ type: 'bulletWall', x: b.x, y: b.y });
-      continue;
-    }
-    let hit = false;
-    for (const ped of state.peds) {
-      if (ped.alive && dist(b.x, b.y, ped.x, ped.y) < 16) {
-        hitPedestrian(ped);
-        state.events.push({ type: 'pedShot', x: ped.x, y: ped.y });
-        hit = true;
-        break;
-      }
-    }
-    if (!hit) {
-      for (const car of state.cars) {
-        if (car.kind === 'player') continue;
-        if (bulletHitsCar(b, car)) {
-          damageCar(car, BULLET.damage);
-          state.events.push({ type: 'carShot', car, x: b.x, y: b.y });
-          hit = true;
-          break;
-        }
-      }
-    }
-    if (!hit) {
-      for (const cop of state.cops) {
-        if (bulletHitsCar(b, cop)) {
-          damageCar(cop, BULLET.damage);
-          state.events.push({ type: 'copShot', car: cop, x: b.x, y: b.y });
-          hit = true;
-          break;
-        }
-      }
-    }
-    if (hit) b.alive = false;
-  }
-  state.bullets = state.bullets.filter((b) => b.alive);
+/** Cooldown ticks down every step, whether or not the trigger is held. */
+export function tickCombat(combat, dt) {
+  if (combat.cooldown > 0) combat.cooldown = Math.max(0, combat.cooldown - dt);
 }
 
 /**
- * A punch in the facing direction: the nearest pedestrian or car inside the arc
- * takes the hit. Returns what was hit, or null.
+ * Fire once. `state` is { player, peds, cops, police, stats, elapsed }.
+ * Returns { hit: 'ped' | 'cop' | null, x, y } or null when still cooling down.
  */
-export function punch(state) {
-  const p = state.player;
-  if (p.punchTimer > 0) return null;
-  p.punchTimer = PLAYER_CONF.punchCooldown;
-  state.events.push({ type: 'punch', x: p.x + p.faceX * 30, y: p.y + p.faceY * 30 });
-  for (const ped of state.peds) {
-    if (!ped.alive) continue;
-    const d = dist(p.x, p.y, ped.x, ped.y);
-    if (d > PLAYER_CONF.punchRange + 14) continue;
-    const ang = Math.atan2(ped.y - p.y, ped.x - p.x);
-    const facing = Math.atan2(p.faceY, p.faceX);
-    if (Math.abs(angleDiff(ang, facing)) > PLAYER_CONF.punchArc) continue;
-    hitPedestrian(ped);
-    state.events.push({ type: 'pedShot', x: ped.x, y: ped.y });
-    return { kind: 'ped', target: ped };
+export function tryShoot(combat, state, dt) {
+  if (combat.cooldown > 0) return null;
+  combat.cooldown = COMBAT.cooldown;
+  const { player, peds } = state;
+  // Shots come from the car when driving, from the player on foot.
+  const ox = player.car ? player.car.x : player.x;
+  const oy = player.car ? player.car.y : player.y;
+  state.stats.shotsFired += 1;
+  state.police.heat = Math.min(5, state.police.heat + COMBAT.heatPerShot);
+  state.police.lastCrimeT = state.elapsed;
+  scarePeds(peds, ox, oy, 220);
+  const ped = nearestPed(peds, ox, oy, COMBAT.range);
+  let cop = null;
+  let copD = COMBAT.range * COMBAT.range;
+  for (const c of state.police.cops) {
+    if (c.kind !== 'foot' || c.health <= 0) continue;
+    const dx = c.x - ox;
+    const dy = c.y - oy;
+    const d = dx * dx + dy * dy;
+    if (d < copD) { copD = d; cop = c; }
   }
-  for (const car of state.cars) {
-    if (car.kind === 'player' || car.wrecked) continue;
-    const d = dist(p.x, p.y, car.x, car.y);
-    if (d > PLAYER_CONF.punchRange + 26) continue;
-    damageCar(car, PLAYER_CONF.punchDamage);
-    state.events.push({ type: 'carShot', car, x: car.x, y: car.y });
-    return { kind: 'car', target: car };
+  const pedD = ped ? (ped.x - ox) ** 2 + (ped.y - oy) ** 2 : Infinity;
+  if (cop && copD < pedD) {
+    cop.health -= 1;
+    if (cop.health <= 0) {
+      cop.down = true;
+      state.police.heat = Math.min(5, state.police.heat + COMBAT.heatPerCopKill);
+      state.stats.copsDown += 1;
+    }
+    return { hit: 'cop', x: cop.x, y: cop.y };
   }
-  return null;
+  if (ped) {
+    ped.alive = false;
+    ped.respawnT = 20;
+    state.stats.pedsDown += 1;
+    state.police.heat = Math.min(5, state.police.heat + COMBAT.heatPerKill);
+    return { hit: 'ped', x: ped.x, y: ped.y };
+  }
+  return { hit: null, x: ox, y: oy };
 }

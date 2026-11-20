@@ -1,75 +1,62 @@
-// The screenshot scenes behind ?shot=start|play|chase|mission|end. Each one plays
-// the real rules forward from a fresh world for a fixed number of steps, steered by
-// the autopilot in world.js (or, for the end scene, by a reckless driver who never
-// steers), so every frame is what a short game really looks like and the same seed
-// always gives the same frame.
-
+// The screenshot scenes behind ?shot=start|play|chase|mission. Each one plays
+// the real rules forward from a fresh world, steered by the same autopilot the
+// headless simulation uses, so the frame is what a real game looks like and
+// the same seed always gives the same frame.
 import { STEP } from './config.js';
 import { botInput, stepWorld } from './world.js';
+import { wantedStars } from './police.js';
 import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
-import { addWanted } from './police.js';
-import { startMission } from './missions.js';
-import { nearestCar } from './vehicles.js';
 
 const START_SECONDS = 5;
 const PLAY_SECONDS = 26;
-const CHASE_SECONDS = 20;
-const MISSION_SECONDS = 12;
-const END_LIMIT_SECONDS = 120;
+const CHASE_SECONDS = 18;
+/** The mission scene fast-forwards the story until mission 8 is running. */
+const MISSION_LIMIT_SECONDS = 1200;
 
-/** Step the world with the autopilot for `seconds` (or until the game ends). */
-function runBot(state, seconds) {
+function runBot(world, seconds, stopWhen) {
   const steps = Math.floor(seconds / STEP);
   for (let i = 0; i < steps; i += 1) {
-    stepWorld(state, botInput(state));
-    if (state.over) break;
+    stepWorld(world, botInput(world, STEP), STEP);
+    if (stopWhen && stopWhen(world)) break;
+    if (world.busted || world.wasted) break;
   }
 }
 
 /**
- * Set `state` to the named scene and return the screen to draw over it.
- * Unknown names stage the title, like the starter does.
+ * Set `world` to the named scene and return the screen to draw over it and
+ * the best money to show. Names: start, play, chase, mission; anything else
+ * is start.
  */
-export function stageShot(name, state) {
+export function stageShot(name, world) {
   if (name === 'play') {
-    runBot(state, PLAY_SECONDS);
-    return { screen: state.over ? SCREEN_OVER : SCREEN_PLAY };
+    runBot(world, PLAY_SECONDS);
+    return { screen: SCREEN_PLAY, best: world.money };
   }
   if (name === 'chase') {
-    runBot(state, 6);
-    addWanted(state, 3, 'staged chase');
-    runBot(state, CHASE_SECONDS);
-    return { screen: state.over ? SCREEN_OVER : SCREEN_PLAY };
+    // Get the bot into a car first, then light three stars: cop cars in the
+    // mirror, the wanted stars lit, the city sliding past. Lighting the heat
+    // while the bot is still on foot just makes it run from the cops on foot.
+    runBot(world, 8);
+    world.police.heat = 3;
+    world.police.lastCrimeT = world.elapsed;
+    runBot(world, 10);
+    return { screen: SCREEN_PLAY, best: world.money };
   }
   if (name === 'mission') {
-    state.cash = 1250;
-    state.missions.done = 3;
-    startMission(state, 3);
-    const bag = state.missions.bags[0];
-    const car = nearestCar(state.cars, bag.x, bag.y, 4000, ['parked']);
-    if (car) {
-      car.kind = 'player';
-      car.x = bag.x - 260;
-      car.y = bag.y;
-      car.angle = 0;
-      state.player.inCar = car;
-      state.player.x = car.x;
-      state.player.y = car.y;
+    runBot(world, MISSION_LIMIT_SECONDS, (w) => w.missions.index === 7 && w.missions.collected >= 1);
+    // If the fast-forward did not reach mission 8 with a crate in hand, keep
+    // playing a little longer; the scene is still a real game state.
+    if (!(world.missions.index === 7 && world.missions.collected >= 1)) {
+      runBot(world, 240, (w) => w.missions.index === 7 && w.missions.collected >= 1);
     }
-    runBot(state, MISSION_SECONDS);
-    return { screen: state.over ? SCREEN_OVER : SCREEN_PLAY };
+    const over = world.busted || world.wasted;
+    return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.money };
   }
-  if (name === 'end') {
-    runBot(state, 8);
-    addWanted(state, 5, 'staged finale');
-    const steps = Math.floor(END_LIMIT_SECONDS / STEP);
-    for (let i = 0; i < steps; i += 1) {
-      stepWorld(state, { up: true, down: false, left: false, right: false, run: false, steal: false, punch: false, shoot: false });
-      if (state.over) break;
-    }
-    if (!state.over) state.over = 'busted';
-    return { screen: SCREEN_OVER };
+  // start: a living city behind the title panel.
+  for (let i = 0; i < START_SECONDS / STEP; i += 1) {
+    stepWorld(world, { up: false, down: false, left: false, right: false, shoot: false, enter: false }, STEP);
   }
-  runBot(state, START_SECONDS);
-  return { screen: SCREEN_TITLE };
+  return { screen: SCREEN_TITLE, best: 0 };
 }
+
+export { wantedStars };

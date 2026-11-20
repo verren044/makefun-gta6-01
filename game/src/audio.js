@@ -1,12 +1,15 @@
-// Sound, synthesized live with WebAudio — no audio files. Tiny bleeps for shots,
-// pickups and menus, a thud for crashes, a two-tone siren while the heat is on,
-// and a little arpeggio when a mission pays out. M mutes everything.
-
+// Sound, synthesised with WebAudio: no audio files, nothing fetched. An engine
+// hum that follows the car's speed, a two-tone siren while wanted, a gunshot
+// crack, a pickup chime and a mission-complete jingle. Everything is guarded:
+// with no AudioContext (headless runs, muted tabs) every call is a no-op.
 export function createAudio() {
   let ctx = null;
-  let muted = false;
-  let sirenTimer = 0;
+  let engineOsc = null;
+  let engineGain = null;
+  let sirenOsc = null;
+  let sirenGain = null;
   let sirenHigh = false;
+  let sirenT = 0;
 
   function ensure() {
     if (ctx) return ctx;
@@ -14,72 +17,86 @@ export function createAudio() {
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) return null;
       ctx = new AC();
+      engineOsc = ctx.createOscillator();
+      engineOsc.type = 'sawtooth';
+      engineOsc.frequency.value = 60;
+      engineGain = ctx.createGain();
+      engineGain.gain.value = 0;
+      engineOsc.connect(engineGain);
+      engineGain.connect(ctx.destination);
+      engineOsc.start();
+      sirenOsc = ctx.createOscillator();
+      sirenOsc.type = 'square';
+      sirenOsc.frequency.value = 700;
+      sirenGain = ctx.createGain();
+      sirenGain.gain.value = 0;
+      sirenOsc.connect(sirenGain);
+      sirenGain.connect(ctx.destination);
+      sirenOsc.start();
     } catch {
       ctx = null;
     }
     return ctx;
   }
 
-  function tone(freq, dur, type, vol, when) {
-    if (muted) return;
-    const ac = ensure();
-    if (!ac) return;
+  function blip(freq, dur, type, vol, slideTo) {
+    const c = ensure();
+    if (!c) return;
     try {
-      const t0 = ac.currentTime + (when || 0);
-      const osc = ac.createOscillator();
-      const gain = ac.createGain();
-      osc.type = type || 'square';
-      osc.frequency.setValueAtTime(freq, t0);
-      gain.gain.setValueAtTime(vol || 0.08, t0);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      if (c.state === 'suspended') void c.resume();
+      const osc = c.createOscillator();
+      const gain = c.createGain();
+      osc.type = type;
+      osc.frequency.value = freq;
+      if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, c.currentTime + dur);
+      gain.gain.value = vol;
+      gain.gain.exponentialRampToValueAtTime(0.001, c.currentTime + dur);
       osc.connect(gain);
-      gain.connect(ac.destination);
-      osc.start(t0);
-      osc.stop(t0 + dur + 0.02);
+      gain.connect(c.destination);
+      osc.start();
+      osc.stop(c.currentTime + dur);
     } catch {
-      // Audio is decoration; a failure here never stops the game.
+      // Sound is garnish; a failure never breaks the game.
     }
   }
 
   return {
-    get muted() {
-      return muted;
-    },
-    toggleMute() {
-      muted = !muted;
-      return muted;
-    },
-    unlock() {
-      ensure();
-      if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
-    },
-    play(name) {
-      if (muted) return;
-      if (name === 'shoot') tone(720, 0.09, 'square', 0.07);
-      else if (name === 'punch') tone(160, 0.08, 'triangle', 0.12);
-      else if (name === 'steal') tone(300, 0.12, 'sawtooth', 0.06);
-      else if (name === 'crash') tone(90, 0.25, 'sawtooth', 0.14);
-      else if (name === 'pickup') {
-        tone(880, 0.1, 'sine', 0.1);
-        tone(1320, 0.14, 'sine', 0.1, 0.09);
-      } else if (name === 'stage') {
-        tone(660, 0.1, 'sine', 0.09);
-        tone(990, 0.12, 'sine', 0.09, 0.08);
-      } else if (name === 'mission' || name === 'story') {
-        [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.16, 'sine', 0.1, i * 0.11));
-      } else if (name === 'siren') {
-        tone(700, 0.15, 'sine', 0.03);
+    /** Call once from a user gesture so the browser allows sound. */
+    unlock() { ensure(); },
+    /** Engine hum follows speed (0..1); siren wails while wanted. */
+    update(speed01, wanted, dt) {
+      const c = ctx;
+      if (!c) return;
+      try {
+        if (engineOsc && engineGain) {
+          engineOsc.frequency.value = 55 + speed01 * 140;
+          engineGain.gain.value = speed01 > 0.02 ? 0.03 + speed01 * 0.03 : 0;
+        }
+        if (sirenOsc && sirenGain) {
+          if (wanted > 0) {
+            sirenT -= dt;
+            if (sirenT <= 0) {
+              sirenT = 0.45;
+              sirenHigh = !sirenHigh;
+              sirenOsc.frequency.value = sirenHigh ? 880 : 660;
+            }
+            sirenGain.gain.value = 0.018;
+          } else {
+            sirenGain.gain.value = 0;
+          }
+        }
+      } catch {
+        // Ignore audio errors mid-frame.
       }
     },
-    /** The two-tone police siren, called every frame while wanted > 0. */
-    siren(dt, wanted) {
-      if (muted || wanted <= 0) return;
-      sirenTimer -= dt;
-      if (sirenTimer <= 0) {
-        sirenTimer = 0.42;
-        sirenHigh = !sirenHigh;
-        tone(sirenHigh ? 780 : 580, 0.38, 'sine', 0.035);
-      }
+    shoot() { blip(220, 0.12, 'square', 0.12, 60); },
+    pickup() { blip(660, 0.12, 'sine', 0.14, 990); },
+    mission() {
+      blip(523, 0.14, 'sine', 0.14);
+      setTimeout(() => blip(659, 0.14, 'sine', 0.14), 130);
+      setTimeout(() => blip(784, 0.22, 'sine', 0.16), 260);
     },
+    busted() { blip(330, 0.5, 'sawtooth', 0.12, 110); },
+    click() { blip(440, 0.05, 'sine', 0.08); },
   };
 }

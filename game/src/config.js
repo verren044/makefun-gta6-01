@@ -1,153 +1,224 @@
-// Solmar Bay — every tuning number, colour, district and car model in one place.
-// The city is a fixed 3200x2400 world; the renderer scales the camera to the window,
-// so no rule below depends on the screen size.
+// Solmar Bay — every tuning number, colour, district and mission in one place.
+// The world is a fixed 3600x2800 top-down city. The renderer scales a 1280x720
+// camera view over it, so no rule below depends on the screen size.
 
-export const WORLD = { width: 3200, height: 2400 };
-
-/** The simulation's fixed step, in seconds: 60 updates a second whatever the display's rate. */
 export const STEP = 1 / 60;
 
-/** Seven north-south roads and five east-west roads; every crossing is a routing node. */
-export const ROADS_X = [320, 680, 1040, 1400, 1760, 2120, 2480];
-export const ROADS_Y = [300, 660, 1020, 1380, 1740];
-export const ROAD_W = 96;
+export const WORLD = { width: 3600, height: 2800 };
 
-/** The sea fills the west strip; the beach runs along its edge. */
-export const SEA_X = 170;
-export const BEACH_X = 230;
+/** Road half-width: the driveable corridor is 56 px across. */
+export const ROAD_HALF = 28;
 
-/** Where a saved game is kept between visits (this browser only). */
-export const SAVE_KEY = 'solmar-bay.save.v1';
+/** Vertical road centre-lines, west to east. 2360 is the boundary road; the seven
+ *  past it (2480..3560) are the Ember Heights street grid, 2360 included making
+ *  eight verticals. The first seven run the full height of the map. */
+export const ROADS_X = [200, 560, 920, 1280, 1640, 2000, 2360, 2480, 2660, 2840, 3020, 3200, 3380, 3560];
 
-export const PLAYER_CONF = {
+/** Horizontal road centre-lines, north to south. The last six (1800..2640) are the
+ *  Ember Heights street grid; the first five run the full width of the map. */
+export const ROADS_Y = [200, 560, 920, 1280, 1640, 1800, 1900, 2100, 2280, 2460, 2640];
+
+/** Ember Heights verticals span only y in [1800, 2800]; main verticals span all y. */
+export const EMBER_X_MIN = 2360;
+export const EMBER_Y_MIN = 1800;
+
+/** Districts: name, bounds and the ground tint the renderer paints under the roads. */
+export const DISTRICTS = [
+  { name: 'DOWNTOWN', x0: 0, y0: 0, x1: 1400, y1: 1400, tint: '#2e3440' },
+  { name: 'VICE HILLS', x0: 1400, y0: 0, x1: 3600, y1: 1800, tint: '#33382f' },
+  { name: 'MARINA', x0: 0, y0: 1400, x1: 1400, y1: 2800, tint: '#2c3a44' },
+  { name: 'SOUTHSIDE', x0: 1400, y0: 1800, x1: 2400, y1: 2800, tint: '#3a3230' },
+  { name: 'EMBER HEIGHTS', x0: 2400, y0: 1800, x1: 3600, y1: 2800, tint: '#453029' },
+];
+
+export const PLAYER = {
+  walkSpeed: 230,
   radius: 14,
-  walkSpeed: 215,
-  runSpeed: 330,
   health: 100,
-  punchRange: 46,
-  punchArc: 1.1,
-  punchDamage: 34,
-  punchCooldown: 0.45,
+  /** Seconds of no damage before health starts coming back. */
+  regenDelay: 6,
+  regenRate: 5,
 };
 
-export const CAR_CONF = {
-  length: 46,
-  width: 22,
-  radius: 17,
-  maxHealth: 100,
-  wreckRespawnSeconds: 6,
+export const CAR = {
+  /** Entering a car only works this close to it. */
+  enterRadius: 46,
+  /** A traffic car this slow counts as stopped, so it can be jacked. */
+  jackSpeed: 40,
+  health: 100,
+  /** Car health regained per second after 4 s without a hit. */
+  regenDelay: 4,
+  regenRate: 2,
+  /** Damage a cop ram does to the player's car. */
+  ramDamage: 3,
 };
 
-export const BULLET = { speed: 900, range: 520, damage: 34, cooldown: 0.22, radius: 4 };
-
-export const WANTED = {
-  maxStars: 5,
-  decaySeconds: 10,
-  copsForStars: [0, 1, 2, 3, 4, 4],
-  ramDamage: 4,
-  ramCooldownSeconds: 2,
-  arrestSeconds: 1.4,
-  arrestRange: 52,
-};
-
-export const TRAFFIC_COUNT = 16;
-export const PED_COUNT = 26;
-export const PARKED_COUNT = 14;
-
-/** Eight original car models: name, paint, top speed, acceleration and handling. */
+/** Twelve drivable models. Ember GT is the fastest car in Solmar Bay. */
 export const CAR_MODELS = [
-  { name: 'Coral Coupe', color: '#e2574c', topSpeed: 520, accel: 300, handling: 2.9 },
-  { name: 'Bay Sedan', color: '#4f7ec2', topSpeed: 460, accel: 260, handling: 2.6 },
-  { name: 'Palm Pickup', color: '#c98a2e', topSpeed: 430, accel: 240, handling: 2.3 },
-  { name: 'Marina Hatch', color: '#3fae8a', topSpeed: 480, accel: 280, handling: 3.0 },
-  { name: 'Solmar Sport', color: '#f2c94c', topSpeed: 580, accel: 340, handling: 3.2 },
-  { name: 'Harbor Van', color: '#8b93a3', topSpeed: 400, accel: 210, handling: 2.0 },
-  { name: 'Sunset Taxi', color: '#e8b93c', topSpeed: 470, accel: 270, handling: 2.7 },
-  { name: 'Dune Buggy', color: '#7fb069', topSpeed: 500, accel: 290, handling: 3.1 },
+  { name: 'Ember GT', top: 640, accel: 420, color: '#e5484d', w: 46, h: 24 },
+  { name: 'Volcano Truck', top: 470, accel: 300, color: '#c2703d', w: 52, h: 26 },
+  { name: 'Casino Limo', top: 500, accel: 320, color: '#d8b45a', w: 58, h: 24 },
+  { name: 'Island Scooter', top: 300, accel: 380, color: '#4fc3f7', w: 30, h: 16 },
+  { name: 'Solmar Coupe', top: 560, accel: 380, color: '#7c5cff', w: 46, h: 22 },
+  { name: 'Vice Sedan', top: 460, accel: 300, color: '#8b93a3', w: 46, h: 22 },
+  { name: 'Marina Cab', top: 440, accel: 310, color: '#f2c94c', w: 46, h: 22 },
+  { name: 'Palm Pickup', top: 450, accel: 290, color: '#5da271', w: 50, h: 24 },
+  { name: 'Neon Hatch', top: 520, accel: 360, color: '#ff7ad9', w: 42, h: 22 },
+  { name: 'Dock Van', top: 420, accel: 270, color: '#c9ced6', w: 52, h: 26 },
+  { name: 'Sunset Cruiser', top: 480, accel: 300, color: '#ff9f43', w: 48, h: 24 },
+  { name: 'Bay Runner', top: 540, accel: 350, color: '#2dd4bf', w: 44, h: 22 },
 ];
 
-export const COP_MODEL = { name: 'Bay Patrol', color: '#22262e', topSpeed: 540, accel: 320, handling: 3.0 };
+export const TRAFFIC_COUNT = 22;
+export const PED_COUNT = 40;
+export const PARKED_COUNT = 18;
+/** Twenty marked parking spots around the map; eighteen of them hold a car. */
+export const PARKING_SPOTS = 20;
 
-/** The eight named landmarks, fixed so missions and the map always agree. Each one
- * sits clear of the road corridors, so no landmark ever blocks a crossing. */
-export const LANDMARKS = [
-  { name: 'Solmar Tower', x: 1470, y: 730, w: 150, h: 110, color: '#5b7fa6' },
-  { name: 'Marina Pier', x: 120, y: 1020, w: 130, h: 60, color: '#8a6d4b' },
-  { name: 'Palm Court Mall', x: 1830, y: 360, w: 190, h: 120, color: '#b06a8a' },
-  { name: 'Harbor Market', x: 750, y: 1450, w: 170, h: 110, color: '#4f8a6d' },
-  { name: "Ray's Garage", x: 2550, y: 1800, w: 150, h: 100, color: '#a67c3d' },
-  { name: 'Solmar Stadium', x: 2190, y: 1090, w: 220, h: 150, color: '#6d7fb0' },
-  { name: 'Coral Park', x: 1040, y: 1740, w: 200, h: 130, color: '#4f8a4f' },
-  { name: 'Sunset Beach', x: 120, y: 1740, w: 150, h: 120, color: '#d9b380' },
-];
+export const POLICE = {
+  /** Cop car top speed: slower than every car except the scooter, so a fast
+   *  getaway always works and a slow one does not. */
+  carTop: 360,
+  carAccel: 340,
+  /** On-foot cops are slower than the player's walk, so fleeing on foot works. */
+  footSpeed: 190,
+  /** A cop this close, for this long, busts an on-foot player. */
+  bustRadius: 26,
+  bustTime: 1.0,
+  /** A stopped player car with a cop car this close, for this long, is busted. */
+  carBustRadius: 50,
+  carBustTime: 1.5,
+  /** Cops spawn this far from the player, on a road. */
+  spawnDist: 520,
+  /** Wanted decays one star per this many clean seconds (no cop within
+   *  cleanRadius and no crime for crimeGrace seconds). */
+  cleanRadius: 500,
+  cleanSeconds: 5,
+  crimeGrace: 4,
+  maxStars: 5,
+};
 
+export const COMBAT = {
+  /** Hitscan pistol: kills the nearest person inside range, any direction. */
+  range: 300,
+  cooldown: 0.35,
+  /** Heat added per shot fired, per person killed, per cop killed, per carjack. */
+  heatPerShot: 0.08,
+  heatPerKill: 1.0,
+  heatPerCopKill: 2.0,
+  heatPerCarjack: 0.25,
+};
+
+export const GOAL_MONEY = 5500;
+
+/**
+ * The eight story missions. Types:
+ *  goto    — reach a waypoint (requireCar: only counts while driving)
+ *  goto2   — reach waypoint A, then waypoint B (requireCar)
+ *  heat    — reach `heat` stars, then lose them all
+ *  collect — pick up `pickups` items, then deliver them to `deliver`
+ * Rewards sum to $5,500.
+ */
 export const MISSION_DEFS = [
   {
-    id: 1,
-    title: 'Borrowed Wheels',
-    briefing: 'Steal a car and drive it to Marina Pier. Lena is waiting.',
-    reward: 250,
-    stages: ['Steal a car', 'Drive to Marina Pier'],
+    id: 1, name: 'First Wheels', type: 'goto', reward: 250, requireCar: true,
+    blurb: 'Steal a car and bring it to Ray\u2019s Garage.',
+    target: { x: 1070, y: 1280 },
   },
   {
-    id: 2,
-    title: 'The Pickup',
-    briefing: 'Collect the package at Harbor Market, then deliver it to Palm Court Mall.',
-    reward: 400,
-    stages: ['Go to Harbor Market', 'Deliver to Palm Court Mall'],
+    id: 2, name: 'Ray\u2019s Package', type: 'goto2', reward: 500, requireCar: true,
+    blurb: 'Pick up the package downtown, then bring it back to Ray.',
+    target: { x: 2000, y: 920 }, target2: { x: 1070, y: 1280 },
   },
   {
-    id: 3,
-    title: 'Heat Wave',
-    briefing: 'The cops are watching. Get to 3 stars, then lose them all.',
-    reward: 600,
-    stages: ['Raise your wanted level to 3 stars', 'Lose the cops — get back to 0 stars'],
+    id: 3, name: 'Three-Star Heat', type: 'heat', reward: 500, heat: 3,
+    blurb: 'Raise three stars of heat, then shake every cop.',
   },
   {
-    id: 4,
-    title: 'The Big Score',
-    briefing: 'Three cash bags are stashed around Solmar Bay. Grab them all and bring them to Ray\'s Garage.',
-    reward: 1000,
-    stages: ['Collect the 3 cash bags', 'Deliver the bags to Ray\'s Garage'],
+    id: 4, name: 'Cash Run', type: 'collect', reward: 1000, pickups: 2, pickupKind: 'cash',
+    blurb: 'Grab the two cash bags, then deliver them to Marina Pier.',
+    spots: [{ x: 560, y: 200 }, { x: 2000, y: 1640 }],
+    deliver: { x: 180, y: 2320 },
+  },
+  {
+    id: 5, name: 'Ember Run', type: 'goto2', reward: 500, requireCar: true,
+    blurb: 'Drive to Ember Casino, then down Volcano road.',
+    target: { x: 2750, y: 2100 }, target2: { x: 2560, y: 2100 },
+  },
+  {
+    id: 6, name: 'Casino Chips', type: 'collect', reward: 750, pickups: 2, pickupKind: 'chips',
+    blurb: 'Lift the two chip bags, then deliver them to Marina Pier.',
+    spots: [{ x: 2560, y: 2280 }, { x: 3020, y: 2460 }],
+    deliver: { x: 180, y: 2320 },
+  },
+  {
+    id: 7, name: 'Four-Star Heat', type: 'heat', reward: 750, heat: 4,
+    blurb: 'Raise four stars of heat, then shake every cop.',
+  },
+  {
+    id: 8, name: 'The Ember Score', type: 'collect', reward: 1250, pickups: 4, pickupKind: 'ember',
+    blurb: 'Take the four ember crates from across the map, then bring them to Ray.',
+    spots: [
+      { x: 2800, y: 2460 }, { x: 200, y: 200 },
+      { x: 2000, y: 2400 }, { x: 920, y: 560 },
+    ],
+    deliver: { x: 1070, y: 1280 },
   },
 ];
 
-export const STORY_GOAL = 2000;
+/** Landmark rectangles (solid). The volcano and the casino sit in Ember Heights,
+ *  near (2560, 2160); Ray's Garage is downtown, nowhere near them. Every
+ *  landmark clears the road corridors around it: a garage or pier edge inside
+ *  a corridor wedges cars on its corner and blocks the road. */
+export const LANDMARKS = {
+  garage: { x: 980, y: 1330, w: 180, h: 120, name: 'Ray\u2019s Garage' },
+  pier: { x: 60, y: 2340, w: 110, h: 120, name: 'Marina Pier' },
+  volcano: { x: 2515, y: 2135, w: 110, h: 110, name: 'Ember Volcano' },
+  casino: { x: 2695, y: 2135, w: 110, h: 110, name: 'Ember Casino' },
+};
+
+/** The Ember Heights park: a green block with trees, no buildings. */
+export const EMBER_PARK = { x: 3228, y: 2308, w: 124, h: 124 };
+/** The downtown park. */
+export const DOWNTOWN_PARK = { x: 588, y: 948, w: 240, h: 240 };
+
+/** Decorative water along the west edge; the pier sits beside it. */
+export const WATER = { x: 0, y: 1900, w: 60, h: 900 };
+
+/** Where the save lives between visits (this browser only). Bumped to v2 for
+ *  the round-3 stats: carjackings, pedsDown and shotsFired are stored now. */
+export const SAVE_KEY = 'solmar-bay.save.v2';
 
 export const PALETTE = {
-  sea: '#2e6f8e',
-  seaDeep: '#25607e',
-  beach: '#d9b380',
-  grass: '#5d8a4a',
-  grassDark: '#527d42',
-  park: '#4f8a4f',
-  sidewalk: '#9aa0a8',
-  road: '#3a3f47',
-  roadEdge: '#2c3038',
-  lane: '#d8c95a',
-  building: '#7d7468',
-  roof: '#5d564c',
-  roofAlt: '#6d5a4a',
-  downtown: '#8a7f70',
-  text: '#f2f4f7',
-  muted: '#b9c0cb',
-  panel: 'rgba(12, 18, 30, 0.82)',
-  panelBorder: 'rgba(255,255,255,0.18)',
-  health: '#58d68d',
-  healthLow: '#e5534b',
-  cash: '#f2c94c',
-  star: '#f2c94c',
-  starEmpty: '#5a6270',
-  player: '#f2f4f7',
-  ped: '#e8a34c',
-  bullet: '#ffe08a',
-  marker: '#ff5a4e',
-  cop: '#3a6fd8',
-  sirenRed: '#ff3b30',
-  sirenBlue: '#3a6fd8',
-  toast: '#ffd166',
-  banner: '#ffd166',
-  title: '#ffd166',
+  backdrop: '#10131a',
+  road: '#232833',
+  roadEdge: '#39404f',
+  roadDash: '#c9a227',
+  building: '#4a5060',
+  buildingRoof: '#5d6577',
+  park: '#2f5d3a',
+  tree: '#3f7a4a',
+  water: '#1d4e6b',
+  volcano: '#6b3a24',
+  lava: '#ff6a00',
+  casino: '#8a6d1f',
+  casinoSign: '#ffd94d',
+  garage: '#7a4a2b',
+  pier: '#8a6d4a',
+  player: '#4fc3f7',
+  playerCar: '#4fc3f7',
+  ped: '#d8cdb4',
+  cop: '#2b6cb0',
+  copCar: '#1f2937',
+  pickupCash: '#37d67a',
+  pickupChips: '#ffd94d',
+  pickupEmber: '#ff6a00',
+  marker: '#ffd94d',
+  text: '#eef1f5',
+  muted: '#9aa3b2',
+  danger: '#e5534b',
+  panel: 'rgba(20, 24, 34, 0.94)',
+  star: '#ffd94d',
 };
 
 export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';

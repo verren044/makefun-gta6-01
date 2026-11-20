@@ -1,98 +1,46 @@
-// Marco Solis on foot: walk, run, and the moves that make the game — stealing a
-// parked car, carjacking a slow one, getting in and out. Driving itself lives in
-// vehicles.js; this file is the man, not the machine.
-
-import { PLAYER_CONF } from './config.js';
-import { clamp } from './random.js';
-import { clampToFree, moveWithCollision } from './city.js';
-import { nearestCar } from './vehicles.js';
+// The player on foot: position, health, and the walk step. Driving lives in
+// vehicles.js; entering and leaving a car is coordinated by world.js.
+import { PLAYER } from './config.js';
+import { moveCircle } from './city.js';
 
 export function createPlayer(x, y) {
   return {
-    x,
-    y,
-    faceX: 0,
-    faceY: 1,
-    health: PLAYER_CONF.health,
-    inCar: null,
+    x, y,
+    angle: 0,
+    health: PLAYER.health,
+    /** The car the player is driving, or null when on foot. */
+    car: null,
+    lastDamageT: -99,
     moving: false,
-    punchTimer: 0,
-    hurtTimer: 0,
-    runDust: 0,
   };
 }
 
-/** One step on foot: WASD/arrows steer, Shift runs, walls slide. */
-export function updateOnFoot(city, player, input, dt) {
-  let mx = (input.right ? 1 : 0) - (input.left ? 1 : 0);
-  let my = (input.down ? 1 : 0) - (input.up ? 1 : 0);
+/** Walk one step in the direction (mx, my), normalised; returns distance moved. */
+export function stepPlayerOnFoot(player, city, mx, my, dt) {
   const len = Math.hypot(mx, my);
-  player.moving = len > 0;
-  if (len > 0) {
-    mx /= len;
-    my /= len;
-    player.faceX = mx;
-    player.faceY = my;
-    const speed = input.run ? PLAYER_CONF.runSpeed : PLAYER_CONF.walkSpeed;
-    const moved = moveWithCollision(city, player.x, player.y, mx * speed * dt, my * speed * dt, PLAYER_CONF.radius);
-    player.x = moved.x;
-    player.y = moved.y;
-    player.runDust += dt;
+  if (len < 0.01) {
+    player.moving = false;
+    return 0;
   }
-  player.punchTimer = Math.max(0, player.punchTimer - dt);
-  player.hurtTimer = Math.max(0, player.hurtTimer - dt);
+  const nx = mx / len;
+  const ny = my / len;
+  const before = { x: player.x, y: player.y };
+  const moved = moveCircle(city, player.x, player.y, nx * PLAYER.walkSpeed * dt, ny * PLAYER.walkSpeed * dt, PLAYER.radius);
+  player.x = moved.x;
+  player.y = moved.y;
+  player.angle = Math.atan2(ny, nx);
+  player.moving = true;
+  return Math.hypot(player.x - before.x, player.y - before.y);
 }
 
-export function hurtPlayer(player, amount) {
-  if (player.hurtTimer > 0 || player.health <= 0) return false;
-  player.health = Math.max(0, player.health - amount);
-  player.hurtTimer = 0.5;
-  return true;
+export function hurtPlayer(player, damage, elapsed) {
+  player.health = Math.max(0, player.health - damage);
+  player.lastDamageT = elapsed;
 }
 
-/**
- * Try to get into a car (E): a parked car is stolen, a slow traffic car is
- * carjacked and its driver flees on foot. Returns the car, or null.
- */
-export function tryEnterCar(state, player) {
-  const car = nearestCar(state.cars, player.x, player.y, 64, ['parked', 'traffic']);
-  if (!car) return null;
-  if (car.kind === 'traffic' && Math.abs(car.speed) > 60) return null;
-  if (car.kind === 'parked') {
-    car.kind = 'player';
-    state.stats.carsStolen += 1;
-    state.events.push({ type: 'steal', car });
-  } else {
-    car.kind = 'player';
-    car.driver = false;
-    state.stats.carsStolen += 1;
-    state.stats.carjackings += 1;
-    state.events.push({ type: 'carjack', car });
-    state.fleeDriverAt = { x: car.x, y: car.y };
+/** Health comes back after a few quiet seconds. */
+export function regenPlayer(player, dt, elapsed) {
+  if (player.health > 0 && player.health < PLAYER.health && elapsed - player.lastDamageT > PLAYER.regenDelay) {
+    player.health = Math.min(PLAYER.health, player.health + PLAYER.regenRate * dt);
   }
-  car.speed = 0;
-  player.inCar = car;
-  player.x = car.x;
-  player.y = car.y;
-  return car;
-}
-
-/** Step out of the car beside it. */
-export function exitCar(state, player) {
-  const car = player.inCar;
-  if (!car) return;
-  player.inCar = null;
-  const side = { x: -Math.sin(car.angle), y: Math.cos(car.angle) };
-  const nx = car.x + side.x * 34;
-  const ny = car.y + side.y * 34;
-  const free = clampToFree(state.city, nx, ny, PLAYER_CONF.radius);
-  player.x = free.x;
-  player.y = free.y;
-  car.speed = 0;
-}
-
-export function playerSpeed(state) {
-  const p = state.player;
-  if (p.inCar) return Math.abs(p.inCar.speed);
-  return p.moving ? PLAYER_CONF.walkSpeed : 0;
 }
